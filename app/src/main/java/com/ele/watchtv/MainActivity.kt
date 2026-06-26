@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Search
@@ -27,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -69,11 +72,19 @@ class MainActivity : ComponentActivity() {
                             Column {
                                 CenterAlignedTopAppBar(
                                     title = { 
-                                        Text(
-                                            "看电视", 
-                                            style = MaterialTheme.typography.titleLarge,
-                                            color = MaterialTheme.colorScheme.primary
-                                        ) 
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                painter = painterResource(id = R.drawable.ic_logo),
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(32.dp).padding(end = 8.dp)
+                                            )
+                                            Text(
+                                                "看电视", 
+                                                style = MaterialTheme.typography.titleLarge,
+                                                color = MaterialTheme.colorScheme.primary
+                                            ) 
+                                        }
                                     }
                                 )
                                 OutlinedTextField(
@@ -146,6 +157,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CategoryRow(viewModel: MainViewModel, onCategorySelected: () -> Unit) {
     val categories by viewModel.categories.collectAsState()
+    val displayMode by viewModel.displayMode.collectAsState()
     var selectedId by remember { mutableStateOf<Int?>(null) }
 
     androidx.compose.foundation.lazy.LazyRow(
@@ -154,10 +166,36 @@ fun CategoryRow(viewModel: MainViewModel, onCategorySelected: () -> Unit) {
     ) {
         item {
             FilterChip(
-                selected = selectedId == null,
+                selected = displayMode == DisplayMode.FAVORITES,
+                onClick = { 
+                    selectedId = -1
+                    onCategorySelected()
+                    viewModel.setDisplayMode(DisplayMode.FAVORITES)
+                },
+                label = { Text("收藏") },
+                shape = RoundedCornerShape(16.dp),
+                leadingIcon = { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)) }
+            )
+        }
+        item {
+            FilterChip(
+                selected = displayMode == DisplayMode.HISTORY,
+                onClick = { 
+                    selectedId = -2
+                    onCategorySelected()
+                    viewModel.setDisplayMode(DisplayMode.HISTORY)
+                },
+                label = { Text("历史") },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+        item {
+            FilterChip(
+                selected = displayMode == DisplayMode.NORMAL && selectedId == null,
                 onClick = { 
                     selectedId = null
                     onCategorySelected()
+                    viewModel.setDisplayMode(DisplayMode.NORMAL)
                     viewModel.selectCategory(null)
                 },
                 label = { Text("全部") },
@@ -166,10 +204,11 @@ fun CategoryRow(viewModel: MainViewModel, onCategorySelected: () -> Unit) {
         }
         items(categories) { category ->
             FilterChip(
-                selected = selectedId == category.type_id,
+                selected = displayMode == DisplayMode.NORMAL && selectedId == category.type_id,
                 onClick = { 
                     selectedId = category.type_id
                     onCategorySelected()
+                    viewModel.setDisplayMode(DisplayMode.NORMAL)
                     viewModel.selectCategory(category.type_id)
                 },
                 label = { Text(category.type_name) },
@@ -294,6 +333,7 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
     val activity = context as? ComponentActivity
     val configuration = LocalConfiguration.current
     val view = LocalView.current
+    val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     
     // 自动感应：当屏幕物理旋转为横屏时
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -340,19 +380,27 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
     val sources = remember(parsedData) { parsedData.map { it.first } }
     val allEpisodes = remember(parsedData) { parsedData.map { it.second } }
 
-    var selectedSourceIndex by remember { mutableIntStateOf(0) }
+    // 加载历史记录
+    val history = remember(vod.vod_id) { viewModel.getHistoryForVod(vod.vod_id) }
+
+    var selectedSourceIndex by remember { mutableIntStateOf(history?.sourceIndex ?: 0) }
     
     val currentEpisodes = remember(allEpisodes, selectedSourceIndex) {
         allEpisodes.getOrNull(selectedSourceIndex) ?: emptyList()
     }
 
-    var currentIndex by remember(currentEpisodes) { mutableIntStateOf(0) }
+    var currentIndex by remember(currentEpisodes) { mutableIntStateOf(history?.episodeIndex ?: 0) }
     
     val currentUrl = remember(currentEpisodes, currentIndex) { 
         currentEpisodes.getOrNull(currentIndex)?.second 
     }
     val currentEpisodeName = remember(currentEpisodes, currentIndex) { 
         currentEpisodes.getOrNull(currentIndex)?.first ?: "" 
+    }
+
+    // 保存历史记录
+    LaunchedEffect(selectedSourceIndex, currentIndex) {
+        viewModel.savePlaybackHistory(vod, selectedSourceIndex, currentIndex, 0L)
     }
 
     Dialog(
@@ -393,6 +441,17 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
                             style = MaterialTheme.typography.titleLarge,
                             modifier = Modifier.weight(1f)
                         )
+                        
+                        val favorites by viewModel.favorites.collectAsState()
+                        val isFav = favorites.any { it.vod_id == vod.vod_id }
+                        IconButton(onClick = { viewModel.toggleFavorite(vod) }) {
+                            Icon(
+                                if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Favorite",
+                                tint = if (isFav) Color.Red else LocalContentColor.current
+                            )
+                        }
+
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.Default.Close, contentDescription = "Close")
                         }

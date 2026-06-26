@@ -1,20 +1,36 @@
 package com.ele.watchtv
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ele.watchtv.data.CategoryItem
+import com.ele.watchtv.data.HistoryItem
+import com.ele.watchtv.data.PersistenceManager
 import com.ele.watchtv.data.VodItem
 import com.ele.watchtv.data.VodService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-class MainViewModel : ViewModel() {
+enum class DisplayMode { NORMAL, FAVORITES, HISTORY }
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val persistence = PersistenceManager(application)
+
+    private val _displayMode = MutableStateFlow(DisplayMode.NORMAL)
+    val displayMode: StateFlow<DisplayMode> = _displayMode
+
     private val _vodList = MutableStateFlow<List<VodItem>>(emptyList())
     val vodList: StateFlow<List<VodItem>> = _vodList
 
     private val _categories = MutableStateFlow<List<CategoryItem>>(emptyList())
     val categories: StateFlow<List<CategoryItem>> = _categories
+
+    private val _favorites = MutableStateFlow<List<VodItem>>(persistence.getFavorites())
+    val favorites: StateFlow<List<VodItem>> = _favorites
+
+    private val _history = MutableStateFlow<List<HistoryItem>>(persistence.getHistory())
+    val history: StateFlow<List<HistoryItem>> = _history
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -29,6 +45,23 @@ class MainViewModel : ViewModel() {
         fetchVodList()
     }
 
+    fun toggleFavorite(vod: VodItem) {
+        if (persistence.isFavorite(vod.vod_id)) {
+            persistence.removeFavorite(vod.vod_id)
+        } else {
+            persistence.saveFavorite(vod)
+        }
+        _favorites.value = persistence.getFavorites()
+    }
+
+    fun savePlaybackHistory(vod: VodItem, sourceIndex: Int, episodeIndex: Int, positionMs: Long) {
+        val item = HistoryItem(vod, sourceIndex, episodeIndex, positionMs)
+        persistence.saveHistory(item)
+        _history.value = persistence.getHistory()
+    }
+
+    fun getHistoryForVod(vodId: Int) = persistence.getHistoryForVod(vodId)
+
     private fun fetchCategories() {
         viewModelScope.launch {
             try {
@@ -41,7 +74,19 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun setDisplayMode(mode: DisplayMode) {
+        _displayMode.value = mode
+        if (mode == DisplayMode.FAVORITES) {
+            _vodList.value = persistence.getFavorites()
+        } else if (mode == DisplayMode.HISTORY) {
+            _vodList.value = persistence.getHistory().map { it.vod }
+        } else {
+            fetchVodList()
+        }
+    }
+
     fun selectCategory(typeId: Int?) {
+        _displayMode.value = DisplayMode.NORMAL
         if (currentTypeId == typeId) return
         currentTypeId = typeId
         currentKeyword = null // 优化点 2：切换分类时清空搜索词
@@ -49,6 +94,9 @@ class MainViewModel : ViewModel() {
     }
 
     fun fetchVodList(keyword: String? = null) {
+        if (_displayMode.value != DisplayMode.NORMAL && keyword == null) return
+        if (keyword != null) _displayMode.value = DisplayMode.NORMAL
+
         viewModelScope.launch {
             _isLoading.value = true
             currentKeyword = keyword
@@ -73,7 +121,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun loadMore() {
-        if (_isLoading.value || isLastPage) return
+        if (_isLoading.value || isLastPage || _displayMode.value != DisplayMode.NORMAL) return
 
         viewModelScope.launch {
             _isLoading.value = true

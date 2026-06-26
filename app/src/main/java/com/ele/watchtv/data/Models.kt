@@ -34,3 +34,11 @@ data class VodItem(
     val vod_area: String?,
     val vod_year: String?
 )
+
+data class HistoryItem(
+    val vod: VodItem,
+    val sourceIndex: Int,
+    val episodeIndex: Int,
+    val positionMs: Long,
+    val timestamp: Long = System.currentTimeMillis()
+)
