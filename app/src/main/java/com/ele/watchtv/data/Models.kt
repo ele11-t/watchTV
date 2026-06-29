@@ -35,6 +35,16 @@ data class VodItem(
     val vod_year: String?
 )
 
+data class VodSource(
+    val name: String,
+    val baseUrl: String
+)
+
+val AvailableSources = listOf(
+    VodSource("量子资源", "https://cj.lziapi.com/"),
+    VodSource("红牛资源", "https://www.hongniuzy2.com/")
+)
+
 data class HistoryItem(
     val vod: VodItem,
     val sourceIndex: Int,

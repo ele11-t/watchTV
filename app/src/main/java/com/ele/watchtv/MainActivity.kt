@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StayCurrentPortrait
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
@@ -79,11 +80,33 @@ class MainActivity : ComponentActivity() {
                                                 tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(32.dp).padding(end = 8.dp)
                                             )
+                                            val currentSource by viewModel.currentSource.collectAsState()
                                             Text(
-                                                "看电视", 
+                                                currentSource.name, 
                                                 style = MaterialTheme.typography.titleLarge,
                                                 color = MaterialTheme.colorScheme.primary
                                             ) 
+                                        }
+                                    },
+                                    actions = {
+                                        var showMenu by remember { mutableStateOf(false) }
+                                        IconButton(onClick = { showMenu = true }) {
+                                            Icon(Icons.Default.Tune, contentDescription = "Switch Source")
+                                        }
+                                        DropdownMenu(
+                                            expanded = showMenu,
+                                            onDismissRequest = { showMenu = false }
+                                        ) {
+                                            com.ele.watchtv.data.AvailableSources.forEach { source ->
+                                                DropdownMenuItem(
+                                                    text = { Text(source.name) },
+                                                    onClick = {
+                                                        showMenu = false
+                                                        searchQuery = ""
+                                                        viewModel.setSource(source)
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 )

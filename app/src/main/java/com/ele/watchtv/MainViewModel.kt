@@ -3,11 +3,13 @@ package com.ele.watchtv
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.ele.watchtv.data.AvailableSources
 import com.ele.watchtv.data.CategoryItem
 import com.ele.watchtv.data.HistoryItem
 import com.ele.watchtv.data.PersistenceManager
 import com.ele.watchtv.data.VodItem
 import com.ele.watchtv.data.VodService
+import com.ele.watchtv.data.VodSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -16,6 +18,9 @@ enum class DisplayMode { NORMAL, FAVORITES, HISTORY }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val persistence = PersistenceManager(application)
+
+    private val _currentSource = MutableStateFlow(AvailableSources[0])
+    val currentSource: StateFlow<VodSource> = _currentSource
 
     private val _displayMode = MutableStateFlow(DisplayMode.NORMAL)
     val displayMode: StateFlow<DisplayMode> = _displayMode
@@ -45,6 +50,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         fetchVodList()
     }
 
+    fun setSource(source: VodSource) {
+        if (_currentSource.value == source) return
+        _currentSource.value = source
+        _displayMode.value = DisplayMode.NORMAL
+        currentTypeId = null
+        currentKeyword = null
+        _categories.value = emptyList()
+        _vodList.value = emptyList()
+        fetchCategories()
+        fetchVodList()
+    }
+
     fun toggleFavorite(vod: VodItem) {
         if (persistence.isFavorite(vod.vod_id)) {
             persistence.removeFavorite(vod.vod_id)
@@ -65,7 +82,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun fetchCategories() {
         viewModelScope.launch {
             try {
-                val response = VodService.instance.getVodList(action = "list")
+                val url = VodService.buildUrl(_currentSource.value.baseUrl)
+                val response = VodService.instance.getVodList(url = url, action = "list")
                 val excludedNames = listOf("电影片", "连续剧", "综艺片", "动漫片", "娱乐新闻", "电影资讯", "新闻资讯", "演员")
                 _categories.value = response.categories?.filter { it.type_name !in excludedNames } ?: emptyList()
             } catch (e: Exception) {
@@ -103,7 +121,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentPage = 1
             isLastPage = false
             try {
+                val url = VodService.buildUrl(_currentSource.value.baseUrl)
                 val response = VodService.instance.getVodList(
+                    url = url,
                     keyword = keyword,
                     page = currentPage,
                     typeId = currentTypeId
@@ -126,8 +146,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             try {
+                val url = VodService.buildUrl(_currentSource.value.baseUrl)
                 val nextPage = currentPage + 1
                 val response = VodService.instance.getVodList(
+                    url = url,
                     keyword = currentKeyword,
                     page = nextPage,
                     typeId = currentTypeId
