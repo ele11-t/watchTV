@@ -13,7 +13,8 @@ interface VodService {
         @Query("ac") action: String = "videolist",
         @Query("pg") page: Int = 1,
         @Query("wd") keyword: String? = null,
-        @Query("t") typeId: Int? = null
+        @Query("t") typeId: Int? = null,
+        @Query("h") hours: Int? = null
     ): VodResponse
 
     companion object {

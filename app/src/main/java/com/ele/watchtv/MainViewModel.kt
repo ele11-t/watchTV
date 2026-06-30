@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-enum class DisplayMode { NORMAL, FAVORITES, HISTORY }
+enum class DisplayMode { NORMAL, FAVORITES, HISTORY, TODAY }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val persistence = PersistenceManager(application)
@@ -40,6 +40,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    private val _crossSourceResults = MutableStateFlow<Map<String, VodItem>>(emptyMap())
+    val crossSourceResults: StateFlow<Map<String, VodItem>> = _crossSourceResults
+
     private var currentPage = 1
     private var currentKeyword: String? = null
     private var currentTypeId: Int? = null
@@ -63,26 +66,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleFavorite(vod: VodItem) {
-        if (persistence.isFavorite(vod.vod_id)) {
-            persistence.removeFavorite(vod.vod_id)
+        // Ensure source info is attached before saving
+        val vodWithSource = if (vod.sourceName == null) {
+            vod.copy(sourceName = _currentSource.value.name, sourceApiUrl = _currentSource.value.apiUrl)
+        } else vod
+
+        if (persistence.isFavorite(vodWithSource.vod_id)) {
+            persistence.removeFavorite(vodWithSource.vod_id)
         } else {
-            persistence.saveFavorite(vod)
+            persistence.saveFavorite(vodWithSource)
         }
         _favorites.value = persistence.getFavorites()
     }
 
     fun savePlaybackHistory(vod: VodItem, sourceIndex: Int, episodeIndex: Int, positionMs: Long) {
-        val item = HistoryItem(vod, sourceIndex, episodeIndex, positionMs)
+        // Ensure source info is attached before saving
+        val vodWithSource = if (vod.sourceName == null) {
+            vod.copy(sourceName = _currentSource.value.name, sourceApiUrl = _currentSource.value.apiUrl)
+        } else vod
+        
+        val item = HistoryItem(vodWithSource, sourceIndex, episodeIndex, positionMs)
         persistence.saveHistory(item)
         _history.value = persistence.getHistory()
     }
 
     fun getHistoryForVod(vodId: Int) = persistence.getHistoryForVod(vodId)
 
+    fun searchAcrossSources(vodName: String) {
+        _crossSourceResults.value = emptyMap()
+        viewModelScope.launch {
+            AvailableSources.forEach { source ->
+                if (source.name == _currentSource.value.name) return@forEach
+                
+                launch {
+                    try {
+                        val response = VodService.instance.getVodList(url = source.apiUrl, keyword = vodName)
+                        val match = response.list?.find { it.vod_name == vodName }
+                        if (match != null) {
+                            val enrichedMatch = match.copy(sourceName = source.name, sourceApiUrl = source.apiUrl)
+                            val currentMap = _crossSourceResults.value
+                            _crossSourceResults.value = currentMap + (source.name to enrichedMatch)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearCrossSourceResults() {
+        _crossSourceResults.value = emptyMap()
+    }
+
     private fun fetchCategories() {
         viewModelScope.launch {
             try {
-                val url = VodService.buildUrl(_currentSource.value.baseUrl)
+                val url = _currentSource.value.apiUrl
                 val response = VodService.instance.getVodList(url = url, action = "list")
                 val excludedNames = listOf("电影片", "连续剧", "综艺片", "动漫片", "娱乐新闻", "电影资讯", "新闻资讯", "演员")
                 _categories.value = response.categories?.filter { it.type_name !in excludedNames } ?: emptyList()
@@ -95,10 +135,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDisplayMode(mode: DisplayMode) {
         _displayMode.value = mode
         if (mode == DisplayMode.FAVORITES) {
-            _vodList.value = persistence.getFavorites()
+            _vodList.value = persistence.getFavorites().distinctBy { "${it.sourceName}_${it.vod_id}" }
         } else if (mode == DisplayMode.HISTORY) {
-            _vodList.value = persistence.getHistory().map { it.vod }
+            _vodList.value = persistence.getHistory().map { it.vod }.distinctBy { "${it.sourceName}_${it.vod_id}" }
         } else {
+            // NORMAL or TODAY
             fetchVodList()
         }
     }
@@ -107,7 +148,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _displayMode.value = DisplayMode.NORMAL
         if (currentTypeId == typeId) return
         currentTypeId = typeId
-        currentKeyword = null // 优化点 2：切换分类时清空搜索词
+        currentKeyword = null
         fetchVodList(keyword = null)
     }
 
@@ -121,15 +162,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentPage = 1
             isLastPage = false
             try {
-                val url = VodService.buildUrl(_currentSource.value.baseUrl)
+                val source = _currentSource.value
                 val response = VodService.instance.getVodList(
-                    url = url,
+                    url = source.apiUrl,
                     keyword = keyword,
                     page = currentPage,
-                    typeId = currentTypeId
+                    typeId = currentTypeId,
+                    hours = if (_displayMode.value == DisplayMode.TODAY) 24 else null
                 )
-                _vodList.value = response.list ?: emptyList()
-                if ((response.list?.size ?: 0) < (response.limit?.toIntOrNull() ?: 20)) {
+                val newList = response.list?.map { it.copy(sourceName = source.name, sourceApiUrl = source.apiUrl) } ?: emptyList()
+                _vodList.value = newList.distinctBy { "${it.sourceName}_${it.vod_id}" }
+                if (newList.size < (response.limit?.toIntOrNull() ?: 20)) {
                     isLastPage = true
                 }
             } catch (e: Exception) {
@@ -146,17 +189,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val url = VodService.buildUrl(_currentSource.value.baseUrl)
+                val source = _currentSource.value
                 val nextPage = currentPage + 1
                 val response = VodService.instance.getVodList(
-                    url = url,
+                    url = source.apiUrl,
                     keyword = currentKeyword,
                     page = nextPage,
-                    typeId = currentTypeId
+                    typeId = currentTypeId,
+                    hours = if (_displayMode.value == DisplayMode.TODAY) 24 else null
                 )
-                val newList = response.list ?: emptyList()
+                val newList = response.list?.map { it.copy(sourceName = source.name, sourceApiUrl = source.apiUrl) } ?: emptyList()
                 if (newList.isNotEmpty()) {
-                    _vodList.value = _vodList.value + newList
+                    val combinedList = _vodList.value + newList
+                    _vodList.value = combinedList.distinctBy { "${it.sourceName}_${it.vod_id}" }
                     currentPage = nextPage
                 } else {
                     isLastPage = true
@@ -171,5 +216,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isLoading.value = false
             }
         }
+    }
+
+    fun onVodClicked(vod: VodItem, onReady: (VodItem) -> Unit) {
+        // Automatic Source Switching Logic
+        val sourceMatch = AvailableSources.find { it.apiUrl == vod.sourceApiUrl || it.name == vod.sourceName }
+        if (sourceMatch != null && sourceMatch != _currentSource.value) {
+            // Switch current source to match the VOD's source
+            _currentSource.value = sourceMatch
+            _displayMode.value = DisplayMode.NORMAL
+            currentTypeId = null
+            currentKeyword = null
+            // We don't fully refresh everything here because we want to play the video immediately.
+            // But we update the source so subsequent actions (like closing the dialog) feel natural.
+            fetchCategories()
+            // fetchVodList() // Optional: could cause UI jump, skip if immediately playing
+        }
+        onReady(vod)
     }
 }

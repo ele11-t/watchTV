@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StayCurrentPortrait
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
@@ -155,13 +156,17 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.padding(innerPadding)) {
                         val vodList by viewModel.vodList.collectAsState()
                         val isLoading by viewModel.isLoading.collectAsState()
+                        val displayMode by viewModel.displayMode.collectAsState()
 
                         if (isLoading && vodList.isEmpty()) {
                             CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                         } else {
                             VodGrid(
                                 vodList = vodList,
-                                onVodClick = { vod -> selectedVod = vod },
+                                displayMode = displayMode,
+                                onVodClick = { vod -> 
+                                    viewModel.onVodClicked(vod) { selectedVod = it }
+                                },
                                 onReachEnd = { viewModel.loadMore() }
                             )
                         }
@@ -214,6 +219,18 @@ fun CategoryRow(viewModel: MainViewModel, onCategorySelected: () -> Unit) {
         }
         item {
             FilterChip(
+                selected = displayMode == DisplayMode.TODAY,
+                onClick = { 
+                    selectedId = -3
+                    onCategorySelected()
+                    viewModel.setDisplayMode(DisplayMode.TODAY)
+                },
+                label = { Text("今日更新") },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+        item {
+            FilterChip(
                 selected = displayMode == DisplayMode.NORMAL && selectedId == null,
                 onClick = { 
                     selectedId = null
@@ -244,6 +261,7 @@ fun CategoryRow(viewModel: MainViewModel, onCategorySelected: () -> Unit) {
 @Composable
 fun VodGrid(
     vodList: List<VodItem>,
+    displayMode: com.ele.watchtv.DisplayMode,
     onVodClick: (VodItem) -> Unit,
     onReachEnd: () -> Unit
 ) {
@@ -276,14 +294,18 @@ fun VodGrid(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(vodList) { vod ->
-            VodCard(vod, onClick = { onVodClick(vod) })
+        items(vodList, key = { "${it.sourceName}_${it.vod_id}" }) { vod ->
+            VodCard(
+                vod = vod, 
+                showSourceTag = displayMode != com.ele.watchtv.DisplayMode.NORMAL,
+                onClick = { onVodClick(vod) }
+            )
         }
     }
 }
 
 @Composable
-fun VodCard(vod: VodItem, onClick: () -> Unit) {
+fun VodCard(vod: VodItem, showSourceTag: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -296,6 +318,7 @@ fun VodCard(vod: VodItem, onClick: () -> Unit) {
                 model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                     .data(vod.vod_pic)
                     .crossfade(true)
+                    .size(300, 420) // 性能优化：限制图片加载尺寸，减轻低端机压力
                     .build(),
                 contentDescription = vod.vod_name,
                 modifier = Modifier
@@ -328,21 +351,43 @@ fun VodCard(vod: VodItem, onClick: () -> Unit) {
                 )
             }
 
-            // 状态标签 (如: 高清, 更新至12集)
-            if (!vod.vod_remarks.isNullOrEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.9f),
-                    shape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 8.dp)
-                ) {
-                    Text(
-                        text = vod.vod_remarks,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White
-                    )
+            // 标签组合 (左上角垂直堆叠)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // 1. 源角标 (仅在收藏/历史显示)
+                if (showSourceTag && !vod.sourceName.isNullOrEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f),
+                        shape = RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp),
+                        modifier = Modifier.wrapContentWidth()
+                    ) {
+                        Text(
+                            text = vod.sourceName,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                // 2. 状态标签 (如: 高清, 更新至12集)
+                if (!vod.vod_remarks.isNullOrEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.9f),
+                        shape = RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp),
+                        modifier = Modifier.wrapContentWidth()
+                    ) {
+                        Text(
+                            text = vod.vod_remarks,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -366,6 +411,20 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
     var isManualPortrait by remember { mutableStateOf(false) }
     val isEffectivelyFullscreen = isLandscape || isManualFullscreen || isManualPortrait
 
+    val crossSourceMap by viewModel.crossSourceResults.collectAsState()
+
+    // 触发跨源搜索
+    LaunchedEffect(vod.vod_name) {
+        viewModel.searchAcrossSources(vod.vod_name)
+    }
+
+    // 退出详情页时清空搜索结果
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.clearCrossSourceResults()
+        }
+    }
+
     // 处理系统状态栏和导航栏
     LaunchedEffect(isEffectivelyFullscreen) {
         val window = activity?.window ?: return@LaunchedEffect
@@ -378,12 +437,13 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
         }
     }
 
-    // 解析并过滤有效播放线路 (优先保留 M3U8 格式)
-    val parsedData = remember(vod.vod_play_from, vod.vod_play_url) {
+    // 解析并合并所有来源的有效线路
+    val parsedData = remember(vod.vod_play_from, vod.vod_play_url, crossSourceMap) {
+        // 1. 解析当前 VOD 的线路
         val fromNames = vod.vod_play_from?.split("$$$") ?: emptyList()
         val urlGroups = vod.vod_play_url?.split("$$$") ?: emptyList()
         
-        val allParsed = fromNames.zip(urlGroups).mapNotNull { (name, urlGroup) ->
+        val currentParsed = fromNames.zip(urlGroups).mapNotNull { (name, urlGroup) ->
             val episodes = urlGroup.split("#").mapNotNull {
                 val parts = it.split("$")
                 if (parts.size >= 2) parts[0] to parts[1] else null
@@ -392,12 +452,32 @@ fun PlayerDialog(vod: VodItem, onDismiss: () -> Unit) {
         }
 
         // 过滤：仅保留线路名包含 m3u8 或链接以 m3u8 结尾的线路
-        val filtered = allParsed.filter { (name, episodes) ->
+        val currentFiltered = currentParsed.filter { (name, episodes) ->
             name.lowercase().contains("m3u8") || 
             episodes.firstOrNull()?.second?.lowercase()?.contains("m3u8") == true
         }
 
-        filtered.ifEmpty { allParsed }
+        val merged = (if (currentFiltered.isEmpty()) currentParsed else currentFiltered).toMutableList()
+
+        // 2. 合并来自其他源的线路
+        crossSourceMap.forEach { (sourceName, externalVod) ->
+            val extNames = externalVod.vod_play_from?.split("$$$") ?: emptyList()
+            val extUrls = externalVod.vod_play_url?.split("$$$") ?: emptyList()
+            extNames.zip(extUrls).forEach { (name, urlGroup) ->
+                val episodes = urlGroup.split("#").mapNotNull {
+                    val parts = it.split("$")
+                    if (parts.size >= 2) parts[0] to parts[1] else null
+                }
+                if (episodes.isNotEmpty()) {
+                    val combinedName = "[$sourceName] $name"
+                    if (combinedName.lowercase().contains("m3u8") || 
+                        episodes.firstOrNull()?.second?.lowercase()?.contains("m3u8") == true) {
+                        merged.add(combinedName to episodes)
+                    }
+                }
+            }
+        }
+        merged
     }
 
     val sources = remember(parsedData) { parsedData.map { it.first } }
@@ -630,6 +710,35 @@ fun VideoPlayer(
         }
     }
 
+    var availableQualities by remember { mutableStateOf<List<Pair<String, androidx.media3.common.TrackSelectionOverride?>>>(listOf("自动" to null)) }
+    var showQualityMenu by remember { mutableStateOf(false) }
+
+    // 监听轨道变化，提取可用分辨率
+    DisposableEffect(exoPlayer) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                val qualities = mutableListOf("自动" to null as androidx.media3.common.TrackSelectionOverride?)
+                tracks.groups.forEach { group ->
+                    if (group.type == androidx.media3.common.C.TRACK_TYPE_VIDEO) {
+                        for (i in 0 until group.length) {
+                            val format = group.getTrackFormat(i)
+                            if (group.isTrackSupported(i) && format.height > 0) {
+                                val label = "${format.height}p"
+                                qualities.add(label to androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, i))
+                            }
+                        }
+                    }
+                }
+                // 排序：分辨率从高到低，并去重
+                availableQualities = qualities.distinctBy { it.first }.sortedByDescending { 
+                    it.first.replace("p", "").toIntOrNull() ?: 0 
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
+    }
+
     LaunchedEffect(urls) {
         val mediaItems = urls.map { MediaItem.fromUri(it) }
         exoPlayer.setMediaItems(mediaItems)
@@ -660,19 +769,71 @@ fun VideoPlayer(
             factory = {
                 PlayerView(context).apply {
                     player = exoPlayer
-                    useController = true // 让 ExoPlayer 自带基础控制栏
+                    useController = true 
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        // 自定义全屏切换按钮组
+        // 画质选择弹出菜单
+        if (showQualityMenu) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .clickable { showQualityMenu = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 8.dp,
+                    modifier = Modifier.width(200.dp).clickable(enabled = false) {}
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            "选择画质", 
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                        availableQualities.forEach { (label, override) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    val params = exoPlayer.trackSelectionParameters.buildUpon()
+                                    if (override == null) {
+                                        params.clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_VIDEO)
+                                    } else {
+                                        params.setOverrideForType(override)
+                                    }
+                                    exoPlayer.trackSelectionParameters = params.build()
+                                    showQualityMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 自定义功能按钮组
         Row(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 40.dp, end = 8.dp) // 增加底部间距以避开播放器自带控制栏
+                .padding(bottom = 40.dp, end = 8.dp)
                 .background(Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small)
         ) {
+            // 画质按钮 (仅当有多个画质可选时显示)
+            if (availableQualities.size > 1) {
+                IconButton(onClick = { showQualityMenu = true }) {
+                    Icon(
+                        imageVector = Icons.Default.HighQuality,
+                        contentDescription = "Quality",
+                        tint = Color.White
+                    )
+                }
+            }
+
             // 竖屏全屏按钮
             IconButton(onClick = onTogglePortrait) {
                 Icon(

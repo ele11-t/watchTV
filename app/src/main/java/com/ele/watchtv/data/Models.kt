@@ -32,17 +32,22 @@ data class VodItem(
     val vod_actor: String?,
     val vod_director: String?,
     val vod_area: String?,
-    val vod_year: String?
+    val vod_year: String?,
+    // Add source info for persistence and cross-source playback
+    val sourceName: String? = null,
+    val sourceApiUrl: String? = null
 )
 
 data class VodSource(
     val name: String,
-    val baseUrl: String
+    val apiUrl: String
 )
 
 val AvailableSources = listOf(
-    VodSource("量子资源", "https://cj.lziapi.com/"),
-    VodSource("红牛资源", "https://www.hongniuzy2.com/")
+    VodSource("量子资源", "https://cj.lziapi.com/api.php/provide/vod/at/json/"),
+    VodSource("红牛资源", "https://www.hongniuzy2.com/api.php/provide/vod/at/json/"),
+    VodSource("最大资源", "https://api.zuidapi.com/api.php/provide/vod/at/json/"),
+    VodSource("金鹰资源", "https://jyzyapi.com/api.php/provide/vod/at/json/")
 )
 
 data class HistoryItem(
